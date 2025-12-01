@@ -1,24 +1,13 @@
-/**
- * Configuration object for Search Terms analysis (PMAX + RSA)
- */
 const CONFIG = {
   default_days: 10,
-  max_days: 365, 
-
-  require_impressions: true, // Set to false to include terms with 0 impressions
-
-  include_pmax: true,  
-  include_search: true, 
-
-  fuzzy_threshold: 0.9, 
-  similarity_min_threshold: 0.10, 
-
-  spreadsheet_url: "URL here",
-
-  // optional
+  max_days: 365,
+  require_impressions: true,
+  include_pmax: true,
+  include_search: true,
+  fuzzy_threshold: 0.9,
+  similarity_min_threshold: 0.05,
+  spreadsheet_url: "https://docs.google.com/spreadsheets/d/1Ce-IzvmVD7nLe0QlESNuA8QaAGGVU43_da23LHhKWM8/edit?gid=0#gid=0",
   include_summary_table: false,
-  
-  // Reference branded terms list
   branded_terms: [
     'nx', 'n x', 'nxx', 'nx x', 'solid edge', 'solide edge', 'solidedge', 'tecnomatix', 
     'technomatix', 'simcenter', 'flotherm', 'starccm', 'star ccm', 'zona', 'teamcenter', 
@@ -34,25 +23,18 @@ const CONFIG = {
     'xpedition', 'hyperlynx', 'simatic', 'electra', 'jt open', 'jt2go', 'insights hub', 
     'geolus', 'ugnx', 'siemense', 'di sw', 'ziemens', 'pave360', 'iray+', 'fastspice', 
     'buildingx', 'vesys', 'partquest', 'tcx', 'tcpcm', 'nx mach', 'tcvis', 'altair', 
-    'dotmatics', 'culgi', 'femap', 'mindsphere', 'polarian', 'polarion', 'unigraphics'
+    'dotmatics', 'culgi', 'femap', 'mindsphere', 'polarian', 'polarion', 'unigraphics', 'heeds', 'tia portal'
   ]
 };
 
-/**
- * Main function to execute search terms analysis with fuzzy matching
- */
 function main() {
   try {
     const spreadsheet = SpreadsheetApp.openByUrl(CONFIG.spreadsheet_url);
-    
-    // Validate days configuration
     const days = Math.min(Math.max(CONFIG.default_days, 1), CONFIG.max_days);
     const date_period = build_date_period(days);
     
-    // Create hidden branded terms reference sheet
     create_branded_terms_sheet(spreadsheet);
     
-    // Run reports based on configuration
     if (CONFIG.include_pmax) {
       const pmax_query = build_pmax_query(date_period);
       run_enhanced_report(pmax_query, spreadsheet, days, 'PMAX');
@@ -63,47 +45,27 @@ function main() {
       run_enhanced_report(search_query, spreadsheet, days, 'Search');
     }
     
-    Logger.log("Search terms analysis with fuzzy matching completed successfully");
-    
+    Logger.log("Search terms analysis completed successfully");
   } catch (error) {
-    Logger.log(`Error in main function: ${error.message}`);
+    Logger.log(`Error in main: ${error.message}`);
     throw error;
   }
 }
 
-/**
- * Build dynamic date period string with correct GAQL syntax
- * @param {number} days - Number of days to look back
- * @return {string} Date period string for GAQL
- */
 function build_date_period(days) {
-  // For standard periods, use DURING syntax
-  if (days === 7) {
-    return "DURING LAST_7_DAYS";
-  } else if (days === 14) {
-    return "DURING LAST_14_DAYS";
-  } else if (days === 30) {
-    return "DURING LAST_30_DAYS";
-  } else {
-    // For custom periods, use date range format
-    const end_date = new Date();
-    const start_date = new Date();
-    start_date.setDate(end_date.getDate() - days);
-    
-    const start_formatted = formatDate(start_date);
-    const end_formatted = formatDate(end_date);
-    
-    return `BETWEEN '${start_formatted}' AND '${end_formatted}'`;
-  }
+  if (days === 7) return "DURING LAST_7_DAYS";
+  if (days === 14) return "DURING LAST_14_DAYS";
+  if (days === 30) return "DURING LAST_30_DAYS";
+  
+  const end_date = new Date();
+  const start_date = new Date();
+  start_date.setDate(end_date.getDate() - days);
+  
+  return `BETWEEN '${formatDate(start_date)}' AND '${formatDate(end_date)}'`;
 }
 
-/**
- * Build PMAX query with dynamic date range
- * @param {string} date_period - Date period string with correct GAQL syntax
- * @return {string} GAQL query string
- */
 function build_pmax_query(date_period) {
-  let base_query = `SELECT 
+  let query = `SELECT 
     campaign_search_term_view.search_term,
     metrics.cost_micros,
     metrics.impressions,
@@ -120,22 +82,14 @@ function build_pmax_query(date_period) {
     WHERE segments.date ${date_period}
     AND campaign.advertising_channel_type IN ('PERFORMANCE_MAX')`;
   
-  if (CONFIG.require_impressions) {
-    base_query += " AND metrics.impressions > 0";
-  }
+  if (CONFIG.require_impressions) query += " AND metrics.impressions > 0";
+  query += " ORDER BY metrics.cost_micros DESC";
   
-  base_query += " ORDER BY metrics.cost_micros DESC";
-  
-  return base_query;
+  return query;
 }
 
-/**
- * Build Search (RSA) query with dynamic date range
- * @param {string} date_period - Date period string with correct GAQL syntax
- * @return {string} GAQL query string
- */
 function build_search_query(date_period) {
-  let base_query = `SELECT
+  let query = `SELECT
     customer.id,
     customer.descriptive_name,
     campaign.id,
@@ -153,30 +107,19 @@ function build_search_query(date_period) {
     FROM search_term_view
     WHERE segments.date ${date_period}`;
   
-  if (CONFIG.require_impressions) {
-    base_query += " AND metrics.impressions > 0";
-  }
+  if (CONFIG.require_impressions) query += " AND metrics.impressions > 0";
+  query += " ORDER BY metrics.cost_micros DESC";
   
-  base_query += " ORDER BY metrics.cost_micros DESC";
-  
-  return base_query;
+  return query;
 }
 
-/**
- * Calculate next refresh date (7 days from now at 5 AM EST)
- * @return {string} Next refresh date formatted
- */
 function calculate_next_refresh() {
   const now = new Date();
   const next_refresh = new Date(now);
   next_refresh.setDate(now.getDate() + 7);
-  next_refresh.setHours(5, 0, 0, 0); // 5 AM
+  next_refresh.setHours(5, 0, 0, 0);
   
-  // Convert to Eastern Time
-  const est_offset = -5.0;
   const is_dst = isDaylightSavingTime(next_refresh);
-  const timezone_offset = is_dst ? -4.0 : -5.0;
-  
   const year = next_refresh.getFullYear();
   const month = (next_refresh.getMonth() + 1).toString().padStart(2, '0');
   const day = next_refresh.getDate().toString().padStart(2, '0');
@@ -184,20 +127,14 @@ function calculate_next_refresh() {
   return `${year}-${month}-${day} 05:00:00 ${is_dst ? 'EDT' : 'EST'}`;
 }
 
-/**
- * Create hidden branded terms reference sheet
- * @param {Spreadsheet} spreadsheet - The spreadsheet object
- */
 function create_branded_terms_sheet(spreadsheet) {
   try {
     let branded_sheet = spreadsheet.getSheetByName('branded_terms_reference');
-    
     if (!branded_sheet) {
       branded_sheet = spreadsheet.insertSheet('branded_terms_reference');
     }
   
     branded_sheet.clear();
-    
     branded_sheet.getRange(1, 1).setValue('Branded Terms Reference List');
     branded_sheet.getRange(1, 1).setFontWeight('bold');
   
@@ -207,21 +144,12 @@ function create_branded_terms_sheet(spreadsheet) {
     }
   
     branded_sheet.hideSheet();
-    
-    Logger.log("Branded terms reference sheet created and hidden");
-    
+    Logger.log("Branded terms sheet created");
   } catch (error) {
     Logger.log(`Error creating branded terms sheet: ${error.message}`);
   }
 }
 
-/**
- * Enhanced report runner with fuzzy matching analysis - creates separate sheets per campaign
- * @param {string} query - GAQL query
- * @param {Spreadsheet} spreadsheet - Spreadsheet object
- * @param {number} days - Number of days in the report period
- * @param {string} report_type - Type of report ('PMAX' or 'Search')
- */
 function run_enhanced_report(query, spreadsheet, days, report_type) {
   try {
     const report = AdsApp.search(query, { apiVersion: 'v21' });
@@ -249,7 +177,7 @@ function run_enhanced_report(query, spreadsheet, days, report_type) {
         status = row.segments.searchTermTargetingStatus;
         customer_id = row.customer.id;
         customer_name = row.customer.descriptiveName;
-      } else { // Search
+      } else {
         search_term = row.searchTermView.searchTerm;
         cost = row.metrics.costMicros / 1000000;
         impressions = row.metrics.impressions;
@@ -266,17 +194,14 @@ function run_enhanced_report(query, spreadsheet, days, report_type) {
       }
       
       if (!account_info) {
-        account_info = {
-          customer_id: customer_id,
-          customer_name: customer_name
-        };
+        account_info = { customer_id, customer_name };
       }
       
       const campaign_key = `${report_type}_${campaign_id}`;
       if (!campaigns_data[campaign_key]) {
         campaigns_data[campaign_key] = {
-          campaign_name: campaign_name,
-          campaign_id: campaign_id,
+          campaign_name,
+          campaign_id,
           campaign_type: report_type,
           search_terms: []
         };
@@ -284,235 +209,103 @@ function run_enhanced_report(query, spreadsheet, days, report_type) {
       }
       
       campaigns_data[campaign_key].search_terms.push({
-        search_term,
-        cost,
-        impressions,
-        clicks,
-        conversions,
-        status,
-        search_term_match_type,
-        keyword_match_type,
-        keyword_text
+        search_term, cost, impressions, clicks, conversions, status,
+        search_term_match_type, keyword_match_type, keyword_text
       });
       
       campaign_totals[campaign_key] += cost;
     }
     
-    // Create separate sheet for each campaign
     for (const campaign_key in campaigns_data) {
       const campaign_data = campaigns_data[campaign_key];
       const campaign_total = campaign_totals[campaign_key];
-      
-      // Get or create campaign sheet with type prefix
       const sheet_name = `${campaign_data.campaign_type}_${campaign_data.campaign_id}`;
       const campaign_sheet = get_or_create_sheet(spreadsheet, sheet_name);
       
-      // Clear existing content
       clear_sheet_content(campaign_sheet);
-      
-      // Add report information header above the table
       add_report_header(campaign_sheet, days, account_info, campaign_data.campaign_name, campaign_data.campaign_id, campaign_data.campaign_type);
       
-      // Process search terms for this campaign and calculate brand analysis
       const processed_data = [];
-      
       for (const term_data of campaign_data.search_terms) {
-        const {
-          search_term,
-          cost,
-          impressions,
-          clicks,
-          conversions,
-          status,
-          search_term_match_type,
-          keyword_match_type,
-          keyword_text
-        } = term_data;
+        const { search_term, cost, impressions, clicks, conversions, status, search_term_match_type, keyword_match_type, keyword_text } = term_data;
         
-        // Calculate metrics
         const cpc = clicks > 0 ? cost / clicks : 0;
         const cost_percentage = campaign_total > 0 ? (cost / campaign_total) : 0;
-        
-        // Perform fuzzy matching analysis
         const brand_analysis = analyze_brand_matching(search_term);
-        
-        // Create exact and phrase match formats
         const exact_match = `[${search_term}]`;
         const phrase_match = `"${search_term}"`;
         
-        // Build row data based on campaign type
         if (campaign_data.campaign_type === 'PMAX') {
           processed_data.push([
-            campaign_data.campaign_id,
-            campaign_data.campaign_name,
-            search_term,
-            status,
-            brand_analysis.regex_match,
-            brand_analysis.fuzzy_match,
-            brand_analysis.similarity_score,
-            cost,
-            cost_percentage,
-            impressions,
-            clicks,
-            cpc,
-            conversions,
-            exact_match,
-            phrase_match
+            campaign_data.campaign_id, campaign_data.campaign_name, search_term, status,
+            brand_analysis.regex_match, brand_analysis.fuzzy_match, brand_analysis.similarity_score,
+            cost, cost_percentage, impressions, clicks, cpc, conversions, exact_match, phrase_match
           ]);
-        } else { // Search
+        } else {
           processed_data.push([
-            campaign_data.campaign_id,
-            campaign_data.campaign_name,
-            search_term,
-            status,
-            search_term_match_type,
-            keyword_match_type,
-            keyword_text,
-            brand_analysis.regex_match,
-            brand_analysis.fuzzy_match,
-            brand_analysis.similarity_score,
-            cost,
-            cost_percentage,
-            impressions,
-            clicks,
-            cpc,
-            conversions,
-            exact_match,
-            phrase_match
+            campaign_data.campaign_id, campaign_data.campaign_name, search_term, status,
+            search_term_match_type, keyword_match_type, keyword_text,
+            brand_analysis.regex_match, brand_analysis.fuzzy_match, brand_analysis.similarity_score,
+            cost, cost_percentage, impressions, clicks, cpc, conversions, exact_match, phrase_match
           ]);
         }
       }
       
-      // Determine header row position based on summary table config
-      let header_row;
+      let header_row = CONFIG.include_summary_table ? 15 : 11;
       if (CONFIG.include_summary_table) {
-        // Add summary table
         add_summary_table(campaign_sheet, processed_data, campaign_data.campaign_type);
-        header_row = 15; // Summary table takes rows 12-14
-      } else {
-        header_row = 11; // No summary table, start after info section with 1 row gap
       }
       
-      // Set up headers based on campaign type
-      let headers;
-      if (campaign_data.campaign_type === 'PMAX') {
-        headers = [
-          "Campaign ID",
-          "Campaign Name",
-          "Search Term",
-          "Status",
-          "Regex Match",
-          "Fuzzy Match (more info.)", 
-          "Similarity Score",
-          "Cost",
-          "% of search cost",
-          "Impressions",
-          "Clicks",
-          "CPC",
-          "Conversions",
-          "Exact Match",
-          "Phrase Match"
-        ];
-      } else { // Search
-        headers = [
-          "Campaign ID",
-          "Campaign Name",
-          "Search Term",
-          "Status",
-          "Search Term Match Type",
-          "Keyword Match Type",
-          "Keyword Text",
-          "Regex Match",
-          "Fuzzy Match (more info.)", 
-          "Similarity Score",
-          "Cost",
-          "% of search cost",
-          "Impressions",
-          "Clicks",
-          "CPC",
-          "Conversions",
-          "Exact Match",
-          "Phrase Match"
-        ];
-      }
+      let headers = campaign_data.campaign_type === 'PMAX'
+        ? ["Campaign ID", "Campaign Name", "Search Term", "Status", "Regex Match", "Fuzzy Match (more info.)", "Similarity Score", "Cost", "% of search cost", "Impressions", "Clicks", "CPC", "Conversions", "Exact Match", "Phrase Match"]
+        : ["Campaign ID", "Campaign Name", "Search Term", "Status", "Search Term Match Type", "Keyword Match Type", "Keyword Text", "Regex Match", "Fuzzy Match (more info.)", "Similarity Score", "Cost", "% of search cost", "Impressions", "Clicks", "CPC", "Conversions", "Exact Match", "Phrase Match"];
       
       campaign_sheet.getRange(header_row, 1, 1, headers.length).setValues([headers]);
       
-      // Add hyperlink to Fuzzy Match column header
       const fuzzy_match_col = campaign_data.campaign_type === 'PMAX' ? 6 : 9;
       const fuzzy_match_cell = campaign_sheet.getRange(header_row, fuzzy_match_col);
       fuzzy_match_cell.setFormula('=HYPERLINK("https://en.wikipedia.org/wiki/Approximate_string_matching", "Fuzzy Match (more info.)")');
       
-      // Write all data at once for better performance
       if (processed_data.length > 0) {
-        const data_range = campaign_sheet.getRange(header_row + 1, 1, processed_data.length, headers.length);
-        data_range.setValues(processed_data);
-        
-        // Format the sheet
+        campaign_sheet.getRange(header_row + 1, 1, processed_data.length, headers.length).setValues(processed_data);
         format_results_sheet(campaign_sheet, headers.length, header_row, campaign_data.campaign_type);
       }
       
-      Logger.log(`Created ${campaign_data.campaign_type} sheet for campaign ${campaign_data.campaign_id} with ${processed_data.length} search terms`);
+      Logger.log(`Created ${campaign_data.campaign_type} sheet for campaign ${campaign_data.campaign_id}`);
     }
     
-    Logger.log(`Successfully processed ${row_count} ${report_type} rows across ${Object.keys(campaigns_data).length} campaigns`);
-    
+    Logger.log(`Processed ${row_count} ${report_type} rows`);
   } catch (error) {
-    Logger.log(`Error in run_enhanced_report for ${report_type}: ${error.message}`);
+    Logger.log(`Error in run_enhanced_report: ${error.message}`);
     throw error;
   }
 }
 
-/**
- * Add summary table above the main data table (only if enabled in config)
- * @param {Sheet} sheet - The sheet to add summary to
- * @param {Array} processed_data - The processed data array
- * @param {string} campaign_type - Type of campaign ('PMAX' or 'Search')
- */
 function add_summary_table(sheet, processed_data, campaign_type) {
-  // Only add summary table if enabled in config
-  if (!CONFIG.include_summary_table) {
-    return;
-  }
+  if (!CONFIG.include_summary_table) return;
   
-  // Initialize summary stats
-  const branded_stats = {
-    cost: 0,
-    impressions: 0,
-    clicks: 0,
-    conversions: 0,
-    count: 0
-  };
+  const branded_stats = { cost: 0, impressions: 0, clicks: 0, conversions: 0, count: 0 };
+  const non_branded_stats = { cost: 0, impressions: 0, clicks: 0, conversions: 0, count: 0 };
   
-  const non_branded_stats = {
-    cost: 0,
-    impressions: 0,
-    clicks: 0,
-    conversions: 0,
-    count: 0
-  };
-  
-  // Calculate summary statistics based on campaign type
   for (const row of processed_data) {
     let regex_match, fuzzy_match, cost, impressions, clicks, conversions;
     
     if (campaign_type === 'PMAX') {
-      regex_match = row[4]; // Regex Match column
-      fuzzy_match = row[5]; // Fuzzy Match column
-      cost = row[7]; // Cost column
-      impressions = row[9]; // Impressions column
-      clicks = row[10]; // Clicks column
-      conversions = row[12]; // Conversions column
-    } else { // Search
-      regex_match = row[7]; // Regex Match column
-      fuzzy_match = row[8]; // Fuzzy Match column
-      cost = row[10]; // Cost column
-      impressions = row[12]; // Impressions column
-      clicks = row[13]; // Clicks column
-      conversions = row[15]; // Conversions column
+      regex_match = row[4];
+      fuzzy_match = row[5];
+      cost = row[7];
+      impressions = row[9];
+      clicks = row[10];
+      conversions = row[12];
+    } else {
+      regex_match = row[7];
+      fuzzy_match = row[8];
+      cost = row[10];
+      impressions = row[12];
+      clicks = row[13];
+      conversions = row[15];
     }
     
-    // Determine if branded (likely branded or possibly branded)
     const is_branded = regex_match === 'likely branded' || fuzzy_match === 'likely branded' || fuzzy_match === 'possibly branded';
     
     if (is_branded) {
@@ -530,81 +323,30 @@ function add_summary_table(sheet, processed_data, campaign_type) {
     }
   }
   
-  // Calculate CPCs
   const branded_cpc = branded_stats.clicks > 0 ? branded_stats.cost / branded_stats.clicks : 0;
   const non_branded_cpc = non_branded_stats.clicks > 0 ? non_branded_stats.cost / non_branded_stats.clicks : 0;
   
-  // Add summary table headers (row 12, starting at column F)
-  const summary_headers = [
-    "Category",
-    "Search Terms",
-    "Cost",
-    "Impressions", 
-    "Clicks",
-    "CPC",
-    "Conversions",
-    "Similarity Score"
-  ];
-  
+  const summary_headers = ["Category", "Search Terms", "Cost", "Impressions", "Clicks", "CPC", "Conversions", "Similarity Score"];
   sheet.getRange(12, 6, 1, summary_headers.length).setValues([summary_headers]);
   
-  // Add branded row
-  const branded_row = [
-    "Branded Terms",
-    branded_stats.count,
-    branded_stats.cost,
-    branded_stats.impressions,
-    branded_stats.clicks,
-    branded_cpc,
-    branded_stats.conversions,
-    "-"
-  ];
-  
+  const branded_row = ["Branded Terms", branded_stats.count, branded_stats.cost, branded_stats.impressions, branded_stats.clicks, branded_cpc, branded_stats.conversions, "-"];
   sheet.getRange(13, 6, 1, branded_row.length).setValues([branded_row]);
   
-  // Add non-branded row
-  const non_branded_row = [
-    "Non-Branded Terms",
-    non_branded_stats.count,
-    non_branded_stats.cost,
-    non_branded_stats.impressions,
-    non_branded_stats.clicks,
-    non_branded_cpc,
-    non_branded_stats.conversions,
-    "-"
-  ];
-  
+  const non_branded_row = ["Non-Branded Terms", non_branded_stats.count, non_branded_stats.cost, non_branded_stats.impressions, non_branded_stats.clicks, non_branded_cpc, non_branded_stats.conversions, "-"];
   sheet.getRange(14, 6, 1, non_branded_row.length).setValues([non_branded_row]);
   
-  // Format summary table
   const summary_range = sheet.getRange(12, 6, 3, summary_headers.length);
   summary_range.setBorder(true, true, true, true, true, true);
   
-  // Format header row
-  const summary_header_range = sheet.getRange(12, 6, 1, summary_headers.length);
-  summary_header_range.setFontWeight('bold');
-  summary_header_range.setBackground('#d9ead3');
-  
-  // Format cost columns
-  sheet.getRange(13, 8, 2, 1).setNumberFormat('$#,##0.00'); // Cost
-  sheet.getRange(13, 11, 2, 1).setNumberFormat('$#,##0.00'); // CPC
-  
-  // Format number columns
-  sheet.getRange(13, 7, 2, 1).setNumberFormat('#,##0'); // Search Terms count
-  sheet.getRange(13, 9, 2, 1).setNumberFormat('#,##0'); // Impressions
-  sheet.getRange(13, 10, 2, 1).setNumberFormat('#,##0'); // Clicks
-  sheet.getRange(13, 12, 2, 1).setNumberFormat('0.00'); // Conversions
+  sheet.getRange(12, 6, 1, summary_headers.length).setFontWeight('bold').setBackground('#d9ead3');
+  sheet.getRange(13, 8, 2, 1).setNumberFormat('$#,##0.00');
+  sheet.getRange(13, 11, 2, 1).setNumberFormat('$#,##0.00');
+  sheet.getRange(13, 7, 2, 1).setNumberFormat('#,##0');
+  sheet.getRange(13, 9, 2, 1).setNumberFormat('#,##0');
+  sheet.getRange(13, 10, 2, 1).setNumberFormat('#,##0');
+  sheet.getRange(13, 12, 2, 1).setNumberFormat('0.00');
 }
 
-/**
- * Add report information header above the data table
- * @param {Sheet} sheet - The sheet to add header to
- * @param {number} days - Number of days in the report period
- * @param {Object} account_info - Account information object
- * @param {string} campaign_name - Campaign name
- * @param {string} campaign_id - Campaign ID
- * @param {string} campaign_type - Campaign type ('PMAX' or 'Search')
- */
 function add_report_header(sheet, days, account_info, campaign_name, campaign_id, campaign_type) {
   const current_time = getEasternTime();
   const next_refresh = calculate_next_refresh();
@@ -615,12 +357,9 @@ function add_report_header(sheet, days, account_info, campaign_name, campaign_id
   const date_range = `${formatDate(start_date)} to ${formatDate(end_date)}`;
   const account_display = `${account_info.customer_name} - ${account_info.customer_id}`;
   const campaign_display = `${campaign_name} - ${campaign_id}`;
-  
-  // Add header information
   const title = campaign_type === 'PMAX' ? 'PMAX Branded Search Term Finder' : 'Search Branded Search Term Finder';
-  sheet.getRange(1, 1).setValue(title);
-  sheet.getRange(1, 1).setFontSize(14).setFontWeight('bold');
   
+  sheet.getRange(1, 1).setValue(title).setFontSize(14).setFontWeight('bold');
   sheet.getRange(2, 1).setValue(`Account: ${account_display}`);
   sheet.getRange(3, 1).setValue(`Campaign: ${campaign_display} (${campaign_type})`);
   sheet.getRange(4, 1).setValue(`Report Period: ${date_range} (${days} days)`);
@@ -630,136 +369,69 @@ function add_report_header(sheet, days, account_info, campaign_name, campaign_id
   sheet.getRange(8, 1).setValue(`Total Branded Terms Referenced: ${CONFIG.branded_terms.length}`);
   sheet.getRange(9, 1).setValue('Note: Non-Latin search terms (Cyrillic, Chinese, Japanese, Korean, Arabic, etc.) are not evaluated for fuzzy matching due to character encoding differences, phonetic variations, and algorithm limitations with non-Latin scripts.');
   
-  // Format header section
   sheet.getRange(2, 1, 7, 1).setFontSize(10);
   sheet.getRange(9, 1).setFontSize(8).setFontStyle('italic');
 }
 
-/**
- * Analyze search term for brand matching using regex and fuzzy logic
- * @param {string} search_term - The search term to analyze
- * @return {Object} Analysis results with regex_match, fuzzy_match, and similarity_score
- */
 function analyze_brand_matching(search_term) {
-  // Handle empty or invalid search terms
   if (!search_term || typeof search_term !== 'string') {
-    return {
-      regex_match: '',
-      fuzzy_match: '',
-      similarity_score: 0
-    };
+    return { regex_match: '', fuzzy_match: '', similarity_score: 0 };
   }
   
-  // Check for non-Latin characters - skip analysis if entire term is non-Latin
   if (is_entirely_non_latin(search_term)) {
-    return {
-      regex_match: '',
-      fuzzy_match: 'not evaluated',
-      similarity_score: 0
-    };
+    return { regex_match: '', fuzzy_match: 'not evaluated', similarity_score: 0 };
   }
   
-  // Perform regex matching first
   const regex_result = check_regex_brand_match(search_term);
-  
-  // If regex found a match, return early
   if (regex_result === 'likely branded') {
-    return {
-      regex_match: regex_result,
-      fuzzy_match: 'likely branded',
-      similarity_score: 1.0
-    };
+    return { regex_match: regex_result, fuzzy_match: 'likely branded', similarity_score: 1.0 };
   }
   
-  // Perform fuzzy matching using Jaro-Winkler similarity
   const similarity_score = BRANDED_FUZZY_3(search_term, CONFIG.branded_terms);
   const fuzzy_classification = classify_fuzzy_result(similarity_score);
   
   return {
     regex_match: regex_result,
     fuzzy_match: fuzzy_classification,
-    similarity_score: Math.round(similarity_score * 1000) / 1000 // Round to 3 decimal places
+    similarity_score: Math.round(similarity_score * 1000) / 1000
   };
 }
 
-/**
- * Check if search term is entirely non-Latin characters
- * @param {string} search_term - The search term to check
- * @return {boolean} True if entirely non-Latin
- */
 function is_entirely_non_latin(search_term) {
-  // Remove spaces and punctuation, then check if remaining chars are non-Latin
   const cleaned_term = search_term.replace(/[\s\-_.]/g, '');
   if (cleaned_term.length === 0) return false;
-  
-  // Check if all remaining characters are non-Latin
   const non_latin_regex = /^[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\u0600-\u06FF]+$/;
   return non_latin_regex.test(cleaned_term);
 }
 
-/**
- * Check for exact regex matches against branded terms
- * @param {string} search_term - The search term to check
- * @return {string} 'likely branded' if match found, empty string otherwise
- */
 function check_regex_brand_match(search_term) {
   const search_lower = search_term.toLowerCase();
   
   for (const branded_term of CONFIG.branded_terms) {
     const branded_lower = branded_term.toLowerCase();
     
-    // Exact match
-    if (search_lower === branded_lower) {
-      return 'likely branded';
-    }
+    if (search_lower === branded_lower) return 'likely branded';
+    if (branded_lower.length > 3 && search_lower.includes(branded_lower)) return 'likely branded';
     
-    // Substring match for longer terms (>3 chars)
-    if (branded_lower.length > 3 && search_lower.includes(branded_lower)) {
-      return 'likely branded';
-    }
-    
-    // Word boundary match for shorter terms (<=3 chars)
     if (branded_lower.length <= 3) {
       const word_boundary_regex = new RegExp(`\\b${escape_regex(branded_lower)}\\b`, 'i');
-      if (word_boundary_regex.test(search_term)) {
-        return 'likely branded';
-      }
+      if (word_boundary_regex.test(search_term)) return 'likely branded';
     }
   }
   
   return '';
 }
 
-/**
- * Classify fuzzy matching result based on similarity score
- * @param {number} similarity_score - Similarity score (0-1)
- * @return {string} Classification result
- */
 function classify_fuzzy_result(similarity_score) {
-  if (similarity_score >= CONFIG.fuzzy_threshold) {
-    return 'possibly branded';
-  } else if (similarity_score >= CONFIG.similarity_min_threshold) {
-    return 'unlikely';
-  } else {
-    return '';
-  }
+  if (similarity_score >= CONFIG.fuzzy_threshold) return 'possibly branded';
+  if (similarity_score >= CONFIG.similarity_min_threshold) return 'unlikely';
+  return '';
 }
 
-/**
- * Escape special regex characters
- * @param {string} string - String to escape
- * @return {string} Escaped string
- */
 function escape_regex(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * Get or create a sheet with the given name
- * @param {Spreadsheet} spreadsheet - The spreadsheet object
- * @param {string} sheet_name - Name of the sheet
- * @return {Sheet} The sheet object
- */
 function get_or_create_sheet(spreadsheet, sheet_name) {
   let sheet = spreadsheet.getSheetByName(sheet_name);
   if (!sheet) {
@@ -768,136 +440,54 @@ function get_or_create_sheet(spreadsheet, sheet_name) {
   return sheet;
 }
 
-/**
- * Clear sheet content safely
- * @param {Sheet} sheet - The sheet to clear
- */
 function clear_sheet_content(sheet) {
   if (sheet.getLastRow() > 0) {
     sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).clear();
   }
 }
 
-/**
- * Format the results sheet for better readability with controlled column widths
- * @param {Sheet} sheet - The sheet to format
- * @param {number} column_count - Number of columns
- * @param {number} header_row - Row number where headers start
- * @param {string} campaign_type - Campaign type ('PMAX' or 'Search')
- */
 function format_results_sheet(sheet, column_count, header_row, campaign_type) {
-  // Set specific column widths based on campaign type
   let column_widths;
   
   if (campaign_type === 'PMAX') {
-    column_widths = {
-      1: 110,  // Campaign ID
-      2: 210,  // Campaign Name
-      3: 260,  // Search Term
-      4: 130,  // Status
-      5: 110,  // Regex Match
-      6: 160,  // Fuzzy Match
-      7: 110,  // Similarity Score
-      8: 90,   // Cost
-      9: 130,  // % of search cost
-      10: 90,  // Impressions
-      11: 70,  // Clicks
-      12: 80,  // CPC
-      13: 90,  // Conversions
-      14: 150, // Exact Match
-      15: 150  // Phrase Match
-    };
-  } else { // Search
-    column_widths = {
-      1: 110,  // Campaign ID
-      2: 210,  // Campaign Name
-      3: 260,  // Search Term
-      4: 130,  // Status
-      5: 150,  // Search Term Match Type
-      6: 150,  // Keyword Match Type
-      7: 200,  // Keyword Text
-      8: 110,  // Regex Match
-      9: 160,  // Fuzzy Match
-      10: 110, // Similarity Score
-      11: 90,  // Cost
-      12: 130, // % of search cost
-      13: 90,  // Impressions
-      14: 70,  // Clicks
-      15: 80,  // CPC
-      16: 90,  // Conversions
-      17: 150, // Exact Match
-      18: 150  // Phrase Match
-    };
+    column_widths = { 1: 110, 2: 210, 3: 260, 4: 130, 5: 110, 6: 160, 7: 110, 8: 90, 9: 130, 10: 90, 11: 70, 12: 80, 13: 90, 14: 150, 15: 150 };
+  } else {
+    column_widths = { 1: 110, 2: 210, 3: 260, 4: 130, 5: 150, 6: 150, 7: 200, 8: 110, 9: 160, 10: 110, 11: 90, 12: 130, 13: 90, 14: 70, 15: 80, 16: 90, 17: 150, 18: 150 };
   }
   
-  // Set column widths
   for (let col = 1; col <= column_count; col++) {
     if (column_widths[col]) {
       sheet.setColumnWidth(col, column_widths[col]);
     }
   }
   
-  // Format header row with gray background and black bottom border
   const header_range = sheet.getRange(header_row, 1, 1, column_count);
-  header_range.setFontWeight('bold');
-  header_range.setBackground('#d9d9d9'); // Gray background
-  header_range.setBorder(false, false, true, false, false, false, '#000000', SpreadsheetApp.BorderStyle.SOLID); // Black bottom border only
-  header_range.setWrap(true); // Enable text wrap for headers
+  header_range.setFontWeight('bold').setBackground('#d9d9d9').setBorder(false, false, true, false, false, false, '#000000', SpreadsheetApp.BorderStyle.SOLID).setWrap(true);
   
-  // Format data rows if they exist
   if (sheet.getLastRow() > header_row) {
     const last_row = sheet.getLastRow();
     const data_rows = last_row - header_row;
     
-    // Format columns based on campaign type
     if (campaign_type === 'PMAX') {
-      // Format Cost column (column 8)
       sheet.getRange(header_row + 1, 8, data_rows, 1).setNumberFormat('$#,##0.00');
-      
-      // Format % of search cost column (column 9)
       sheet.getRange(header_row + 1, 9, data_rows, 1).setNumberFormat('0.00%');
-      
-      // Format CPC column (column 12)
       sheet.getRange(header_row + 1, 12, data_rows, 1).setNumberFormat('$#,##0.00');
-      
-      // Format Similarity Score column (column 7) as decimal
       sheet.getRange(header_row + 1, 7, data_rows, 1).setNumberFormat('0.000');
-      
-      // Format Impressions and Clicks as numbers with commas
-      sheet.getRange(header_row + 1, 10, data_rows, 1).setNumberFormat('#,##0'); // Impressions
-      sheet.getRange(header_row + 1, 11, data_rows, 1).setNumberFormat('#,##0'); // Clicks
-      sheet.getRange(header_row + 1, 13, data_rows, 1).setNumberFormat('0.00'); // Conversions
-    } else { // Search
-      // Format Cost column (column 11)
+      sheet.getRange(header_row + 1, 10, data_rows, 1).setNumberFormat('#,##0');
+      sheet.getRange(header_row + 1, 11, data_rows, 1).setNumberFormat('#,##0');
+      sheet.getRange(header_row + 1, 13, data_rows, 1).setNumberFormat('0.00');
+    } else {
       sheet.getRange(header_row + 1, 11, data_rows, 1).setNumberFormat('$#,##0.00');
-      
-      // Format % of search cost column (column 12)
       sheet.getRange(header_row + 1, 12, data_rows, 1).setNumberFormat('0.00%');
-      
-      // Format CPC column (column 15)
       sheet.getRange(header_row + 1, 15, data_rows, 1).setNumberFormat('$#,##0.00');
-      
-      // Format Similarity Score column (column 10) as decimal
       sheet.getRange(header_row + 1, 10, data_rows, 1).setNumberFormat('0.000');
-      
-      // Format Impressions and Clicks as numbers with commas
-      sheet.getRange(header_row + 1, 13, data_rows, 1).setNumberFormat('#,##0'); // Impressions
-      sheet.getRange(header_row + 1, 14, data_rows, 1).setNumberFormat('#,##0'); // Clicks
-      sheet.getRange(header_row + 1, 16, data_rows, 1).setNumberFormat('0.00'); // Conversions
+      sheet.getRange(header_row + 1, 13, data_rows, 1).setNumberFormat('#,##0');
+      sheet.getRange(header_row + 1, 14, data_rows, 1).setNumberFormat('#,##0');
+      sheet.getRange(header_row + 1, 16, data_rows, 1).setNumberFormat('0.00');
     }
   }
 }
 
-// ============================================================================
-// FUZZY MATCHING FUNCTIONS
-// ============================================================================
-
-/**
- * Calculate Jaro-Winkler similarity between two strings
- * @param {string} s1 - First string
- * @param {string} s2 - Second string
- * @return {number} Similarity score between 0-1
- */
 function jaroWinklerSimilarity(s1, s2) {
   if (!s1 || !s2) return 0;
   if (s1 === s2) return 1;
@@ -910,7 +500,6 @@ function jaroWinklerSimilarity(s1, s2) {
   const matches2 = new Array(len2).fill(false);
   let matching_chars = 0;
   
-  // Find matching characters within the window
   for (let i = 0; i < len1; i++) {
     const start = Math.max(0, i - match_window);
     const end = Math.min(i + match_window + 1, len2);
@@ -927,7 +516,6 @@ function jaroWinklerSimilarity(s1, s2) {
   
   if (matching_chars === 0) return 0;
   
-  // Count transpositions
   let transpositions = 0;
   let k = 0;
   
@@ -939,12 +527,10 @@ function jaroWinklerSimilarity(s1, s2) {
     }
   }
   
-  // Calculate Jaro similarity
   const m = matching_chars;
   const t = transpositions / 2;
   const jaro = (m / len1 + m / len2 + (m - t) / m) / 3;
   
-  // Calculate common prefix length (up to 4 chars)
   let l = 0;
   const max_prefix = Math.min(4, len1, len2);
   for (let i = 0; i < max_prefix; i++) {
@@ -955,24 +541,15 @@ function jaroWinklerSimilarity(s1, s2) {
     }
   }
   
-  // Calculate Jaro-Winkler similarity
-  const p = 0.1; // Scaling factor
+  const p = 0.1;
   return jaro + (l * p * (1 - jaro));
 }
 
-/**
- * Optimized fuzzy brand matching function with non-Latin character detection
- * Returns highest Jaro-Winkler similarity score, or 0 if non-Latin
- * @param {string} searchTerm - The search term to check
- * @param {string[]} brandedTerms - Array of branded terms to check against
- * @return {number} Highest similarity score (0-1) or 0 if non-Latin
- */
 function BRANDED_FUZZY_3(searchTerm, brandedTerms) {
   if (!searchTerm || !brandedTerms) return 0;
   
   const search_term_str = String(searchTerm);
   
-  // Fast non-Latin check - return 0 immediately if non-Latin characters found
   if (/[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\u0600-\u06FF]/.test(search_term_str)) {
     return 0;
   }
@@ -983,24 +560,20 @@ function BRANDED_FUZZY_3(searchTerm, brandedTerms) {
   
   let max_similarity = 0;
   
-  // Process each branded term
   for (const branded_term of brandedTerms) {
     if (!branded_term) continue;
     
     const branded_term_clean = String(branded_term).toLowerCase();
     if (branded_term_clean === "") continue;
     
-    // Exact match shortcut
     if (branded_term_clean === search_term_lower) return 1;
     
-    // Substring check with length weighting
     if (search_term_lower.includes(branded_term_clean)) {
       const substring_score = branded_term_clean.length / search_term_lower.length;
       max_similarity = Math.max(max_similarity, substring_score);
       if (substring_score > 0.9) continue;
     }
     
-    // Word-level exact matching
     const branded_term_words = branded_term_clean.split(/\s+/);
     let has_exact_word_match = false;
     
@@ -1012,18 +585,14 @@ function BRANDED_FUZZY_3(searchTerm, brandedTerms) {
       }
     }
     
-    // Skip expensive operations if we already have a good match
     if (has_exact_word_match && max_similarity > 0.8) continue;
     
-    // For short terms (3 chars or less), only consider full word matches
     if (branded_term_clean.length <= 3) {
       const word_boundary_pattern = new RegExp(`\\b${escape_regex(branded_term_clean)}\\b`);
       if (word_boundary_pattern.test(search_term_lower)) {
         max_similarity = Math.max(max_similarity, 0.9);
       }
-    } 
-    // For longer terms, use Jaro-Winkler similarity
-    else if (max_similarity < 0.9) {
+    } else if (max_similarity < 0.9) {
       const similarity = jaroWinklerSimilarity(search_term_lower, branded_term_clean);
       max_similarity = Math.max(max_similarity, similarity);
     }
@@ -1032,15 +601,6 @@ function BRANDED_FUZZY_3(searchTerm, brandedTerms) {
   return max_similarity;
 }
 
-// ============================================================================
-// UTILITY FUNCTIONS
-// ============================================================================
-
-/**
- * Formats a date as YYYY-MM-DD
- * @param {Date} date - The date to format
- * @return {string} Formatted date
- */
 function formatDate(date) {
   const year = date.getFullYear();
   const month = (date.getMonth() + 1).toString().padStart(2, '0');
@@ -1048,19 +608,12 @@ function formatDate(date) {
   return `${year}-${month}-${day}`;
 }
 
-/**
- * Gets the current time in Eastern Standard Time
- * @return {string} Current time in EST formatted as YYYY-MM-DD HH:MM:SS EST
- */
 function getEasternTime() {
   const now = new Date();
-  
-  // Convert to Eastern Time (UTC-5)
   const est_offset = -5.0;
   const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
   let est = new Date(utc + (3600000 * est_offset));
   
-  // Check if Daylight Saving Time
   const is_dst = isDaylightSavingTime(now);
   if (is_dst) {
     est = new Date(utc + (3600000 * (est_offset + 1)));
@@ -1076,16 +629,9 @@ function getEasternTime() {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} ${is_dst ? 'EDT' : 'EST'}`;
 }
 
-/**
- * Checks if a date is during Daylight Saving Time in the US
- * @param {Date} date - The date to check
- * @return {boolean} Whether the date is during DST
- */
 function isDaylightSavingTime(date) {
   const jan = new Date(date.getFullYear(), 0, 1);
   const jul = new Date(date.getFullYear(), 6, 1);
-  
   const std_timezone_offset = Math.max(jan.getTimezoneOffset(), jul.getTimezoneOffset());
-  
   return date.getTimezoneOffset() < std_timezone_offset;
 }
