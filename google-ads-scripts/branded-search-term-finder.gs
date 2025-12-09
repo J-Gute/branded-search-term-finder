@@ -6,7 +6,7 @@ const CONFIG = {
   include_search: true,
   fuzzy_threshold: 0.9,
   similarity_min_threshold: 0.05,
-  spreadsheet_url: "https://docs.google.com/spreadsheets/d/1Ce-IzvmVD7nLe0QlESNuA8QaAGGVU43_da23LHhKWM8/edit?gid=0#gid=0",
+  spreadsheet_url: "URL here",
   include_summary_table: false,
   branded_terms: [
     'nx', 'n x', 'nxx', 'nx x', 'solid edge', 'solide edge', 'solidedge', 'tecnomatix', 
