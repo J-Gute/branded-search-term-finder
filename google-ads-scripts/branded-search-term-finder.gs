@@ -1,10 +1,10 @@
 const CONFIG = {
-  default_days: 60,
+  default_days: 7,
   max_days: 365,
   require_impressions: true,
   include_pmax: true,
   include_search: true,
-  automate_exclusions: true,
+  automate_exclusions: false,
   fuzzy_threshold: 0.9,
   similarity_min_threshold: 0.05,
   spreadsheet_url: "URL here",
