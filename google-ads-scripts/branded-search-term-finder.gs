@@ -1,29 +1,17 @@
 const CONFIG = {
-  default_days: 10,
+  default_days: 60,
   max_days: 365,
   require_impressions: true,
   include_pmax: true,
   include_search: true,
+  automate_exclusions: true,
   fuzzy_threshold: 0.9,
   similarity_min_threshold: 0.05,
   spreadsheet_url: "URL here",
-  include_summary_table: false,
   branded_terms: [
-    'nx', 'n x', 'nxx', 'nx x', 'solid edge', 'solide edge', 'solidedge', 'tecnomatix', 
-    'technomatix', 'simcenter', 'flotherm', 'starccm', 'star ccm', 'zona', 'teamcenter', 
-    'tcx', 'zelx', 'zel x', 'opcenter', 'calibre', 'aprisa', '3dic', 'capital', 'riffyn', 
-    'opscenter', 'jtopen', 'opcenterx', 'heeds', 'microred', 'valor', 'ugs', 'mendix', 
-    'mendex', 'mandix', 'siemens', 'team centre', 'designcenter', 'xcelerator', 
-    'digital twin', 'insightshub', 'insighthub', 'tessent', 'siemeis', 'siwmens', 
-    'diemens', 'siemsn', 'soemens', 'siemn', 'siemens healthineers', 'siemens empresa', 
-    'siemans', 'siemons', 'pads', 'nx cam', 'anovis', 'polarian', 'seemens', 'suemens', 
-    'siem ns', 'cimens', 'siemeen', 'seimene', 'siemes', 'simens', 'siemems', 'siesmens', 
-    'slemens', 'siems', 'siemense', 'ziemens', 'siemins', 'simen s', 'siemies', 'seimans', 
-    'siemebs', 'siement', 'siemens', 'amesim', 'mentor', 'nastran', 'testlab', 'flomaster', 
-    'xpedition', 'hyperlynx', 'simatic', 'electra', 'jt open', 'jt2go', 'insights hub', 
-    'geolus', 'ugnx', 'siemense', 'di sw', 'ziemens', 'pave360', 'iray+', 'fastspice', 
-    'buildingx', 'vesys', 'partquest', 'tcx', 'tcpcm', 'nx mach', 'tcvis', 'altair', 
-    'dotmatics', 'culgi', 'femap', 'mindsphere', 'polarian', 'polarion', 'unigraphics', 'heeds', 'tia portal'
+    'nx', 'nxx', 'hyperlynx', 'tia portal', 'simcenter', 'teamcenter', 'heeds', 'flotherm', 'simatic', 'tecnomatix', 'solid edge', 'capital',
+    'aprisa', 'calibre', 'tessent', 'opcenter', 'nx mach', 'nastran', 'star ccm', 'polarion', 'healthineers', 'dotmatics', 'altair', 'geolus',
+    'jt open', 'flomaster', 'testlab', 'mentor graphics', 'unigraphics', 'empresa', 'microred', 'amesim', 'culgi', 'vesys'
   ]
 };
 
@@ -35,14 +23,26 @@ function main() {
     
     create_branded_terms_sheet(spreadsheet);
     
+    let all_branded_terms = [];
+    let account_info = null;
+    
     if (CONFIG.include_pmax) {
       const pmax_query = build_pmax_query(date_period);
-      run_enhanced_report(pmax_query, spreadsheet, days, 'PMAX');
+      const result = run_enhanced_report(pmax_query, spreadsheet, days, 'PMAX');
+      all_branded_terms = all_branded_terms.concat(result.branded_terms);
+      if (!account_info) account_info = result.account_info;
     }
     
     if (CONFIG.include_search) {
       const search_query = build_search_query(date_period);
-      run_enhanced_report(search_query, spreadsheet, days, 'Search');
+      const result = run_enhanced_report(search_query, spreadsheet, days, 'Search');
+      all_branded_terms = all_branded_terms.concat(result.branded_terms);
+      if (!account_info) account_info = result.account_info;
+    }
+    
+    if (CONFIG.automate_exclusions && all_branded_terms.length > 0 && account_info) {
+      const unique_branded = [...new Set(all_branded_terms)];
+      add_to_exclusion_list(account_info.customer_name, unique_branded);
     }
     
     Logger.log("Search terms analysis completed successfully");
@@ -80,7 +80,8 @@ function build_pmax_query(date_period) {
     customer.descriptive_name
     FROM campaign_search_term_view
     WHERE segments.date ${date_period}
-    AND campaign.advertising_channel_type IN ('PERFORMANCE_MAX')`;
+    AND campaign.advertising_channel_type IN ('PERFORMANCE_MAX')
+    AND segments.search_term_targeting_status IN ('NONE', 'UNKNOWN')`;
   
   if (CONFIG.require_impressions) query += " AND metrics.impressions > 0";
   query += " ORDER BY metrics.cost_micros DESC";
@@ -95,9 +96,6 @@ function build_search_query(date_period) {
     campaign.id,
     campaign.name,
     campaign.advertising_channel_type,
-    segments.search_term_match_type,
-    segments.keyword.info.match_type,
-    segments.keyword.info.text,
     search_term_view.search_term,
     metrics.cost_micros,
     metrics.impressions,
@@ -105,7 +103,8 @@ function build_search_query(date_period) {
     metrics.conversions,
     search_term_view.status
     FROM search_term_view
-    WHERE segments.date ${date_period}`;
+    WHERE segments.date ${date_period}
+    AND search_term_view.status IN ('NONE', 'UNKNOWN')`;
   
   if (CONFIG.require_impressions) query += " AND metrics.impressions > 0";
   query += " ORDER BY metrics.cost_micros DESC";
@@ -158,13 +157,13 @@ function run_enhanced_report(query, spreadsheet, days, report_type) {
     const campaign_totals = {};
     let row_count = 0;
     let account_info = null;
+    const branded_terms = [];
     
     while (report.hasNext()) {
       const row = report.next();
       row_count++;
       
-      let search_term, cost, impressions, clicks, conversions, campaign_id, campaign_name, status, customer_id, customer_name;
-      let search_term_match_type = '', keyword_match_type = '', keyword_text = '';
+      let search_term, cost, impressions, clicks, conversions, campaign_id, campaign_name, customer_id, customer_name;
       
       if (report_type === 'PMAX') {
         search_term = row.campaignSearchTermView.searchTerm;
@@ -174,7 +173,6 @@ function run_enhanced_report(query, spreadsheet, days, report_type) {
         conversions = row.metrics.conversions;
         campaign_id = row.campaign.id;
         campaign_name = row.campaign.name;
-        status = row.segments.searchTermTargetingStatus;
         customer_id = row.customer.id;
         customer_name = row.customer.descriptiveName;
       } else {
@@ -185,12 +183,8 @@ function run_enhanced_report(query, spreadsheet, days, report_type) {
         conversions = row.metrics.conversions;
         campaign_id = row.campaign.id;
         campaign_name = row.campaign.name;
-        status = row.searchTermView.status;
         customer_id = row.customer.id;
         customer_name = row.customer.descriptiveName;
-        search_term_match_type = row.segments.searchTermMatchType || '';
-        keyword_match_type = row.segments.keyword?.info?.matchType || '';
-        keyword_text = row.segments.keyword?.info?.text || '';
       }
       
       if (!account_info) {
@@ -209,8 +203,7 @@ function run_enhanced_report(query, spreadsheet, days, report_type) {
       }
       
       campaigns_data[campaign_key].search_terms.push({
-        search_term, cost, impressions, clicks, conversions, status,
-        search_term_match_type, keyword_match_type, keyword_text
+        search_term, cost, impressions, clicks, conversions
       });
       
       campaign_totals[campaign_key] += cost;
@@ -227,44 +220,39 @@ function run_enhanced_report(query, spreadsheet, days, report_type) {
       
       const processed_data = [];
       for (const term_data of campaign_data.search_terms) {
-        const { search_term, cost, impressions, clicks, conversions, status, search_term_match_type, keyword_match_type, keyword_text } = term_data;
+        const { search_term, cost, impressions, clicks, conversions } = term_data;
         
         const cpc = clicks > 0 ? cost / clicks : 0;
         const cost_percentage = campaign_total > 0 ? (cost / campaign_total) : 0;
-        const brand_analysis = analyze_brand_matching(search_term);
+        const max_string_similarity = BRANDED_FUZZY_3(search_term, CONFIG.branded_terms);
+        const best_match = find_best_branded_match(search_term);
+        const terms_detected = find_detected_branded_terms(search_term);
+        const siemens_branded = determine_siemens_branded(search_term, max_string_similarity, terms_detected);
         const exact_match = `[${search_term}]`;
         const phrase_match = `"${search_term}"`;
         
-        if (campaign_data.campaign_type === 'PMAX') {
-          processed_data.push([
-            campaign_data.campaign_id, campaign_data.campaign_name, search_term, status,
-            brand_analysis.regex_match, brand_analysis.fuzzy_match, brand_analysis.similarity_score,
-            cost, cost_percentage, impressions, clicks, cpc, conversions, exact_match, phrase_match
-          ]);
-        } else {
-          processed_data.push([
-            campaign_data.campaign_id, campaign_data.campaign_name, search_term, status,
-            search_term_match_type, keyword_match_type, keyword_text,
-            brand_analysis.regex_match, brand_analysis.fuzzy_match, brand_analysis.similarity_score,
-            cost, cost_percentage, impressions, clicks, cpc, conversions, exact_match, phrase_match
-          ]);
+        if (siemens_branded === 'branded') {
+          branded_terms.push(search_term);
         }
+        
+        processed_data.push([
+          campaign_data.campaign_id, campaign_data.campaign_name, search_term, best_match, 
+          Math.round(max_string_similarity * 1000) / 1000, terms_detected, siemens_branded,
+          cost, cost_percentage, impressions, clicks, cpc, conversions, exact_match, phrase_match
+        ]);
       }
       
-      let header_row = CONFIG.include_summary_table ? 15 : 11;
-      if (CONFIG.include_summary_table) {
-        add_summary_table(campaign_sheet, processed_data, campaign_data.campaign_type);
-      }
+      const header_row = 11;
       
-      let headers = campaign_data.campaign_type === 'PMAX'
-        ? ["Campaign ID", "Campaign Name", "Search Term", "Status", "Regex Match", "Fuzzy Match (more info.)", "Similarity Score", "Cost", "% of search cost", "Impressions", "Clicks", "CPC", "Conversions", "Exact Match", "Phrase Match"]
-        : ["Campaign ID", "Campaign Name", "Search Term", "Status", "Search Term Match Type", "Keyword Match Type", "Keyword Text", "Regex Match", "Fuzzy Match (more info.)", "Similarity Score", "Cost", "% of search cost", "Impressions", "Clicks", "CPC", "Conversions", "Exact Match", "Phrase Match"];
+      let headers = ["Campaign ID", "Campaign Name", "Search Term", "Best Match", "Max String Similarity", "Terms Detected", "Siemens Branded", "Cost", "% of search cost", "Impressions", "Clicks", "CPC", "Conversions", "Exact Match", "Phrase Match"];
       
       campaign_sheet.getRange(header_row, 1, 1, headers.length).setValues([headers]);
       
-      const fuzzy_match_col = campaign_data.campaign_type === 'PMAX' ? 6 : 9;
-      const fuzzy_match_cell = campaign_sheet.getRange(header_row, fuzzy_match_col);
-      fuzzy_match_cell.setFormula('=HYPERLINK("https://en.wikipedia.org/wiki/Approximate_string_matching", "Fuzzy Match (more info.)")');
+      const max_sim_cell = campaign_sheet.getRange(header_row, 5);
+      max_sim_cell.setFormula('=HYPERLINK("https://en.wikipedia.org/wiki/Jaro%E2%80%93Winkler_distance", "Max String Similarity")');
+      
+      const branded_col_cell = campaign_sheet.getRange(header_row, 7);
+      branded_col_cell.setNote('Branded if: detected branded term(s) within search term OR max string similarity >= fuzzy threshold');
       
       if (processed_data.length > 0) {
         campaign_sheet.getRange(header_row + 1, 1, processed_data.length, headers.length).setValues(processed_data);
@@ -275,76 +263,12 @@ function run_enhanced_report(query, spreadsheet, days, report_type) {
     }
     
     Logger.log(`Processed ${row_count} ${report_type} rows`);
+    
+    return { branded_terms, account_info };
   } catch (error) {
     Logger.log(`Error in run_enhanced_report: ${error.message}`);
     throw error;
   }
-}
-
-function add_summary_table(sheet, processed_data, campaign_type) {
-  if (!CONFIG.include_summary_table) return;
-  
-  const branded_stats = { cost: 0, impressions: 0, clicks: 0, conversions: 0, count: 0 };
-  const non_branded_stats = { cost: 0, impressions: 0, clicks: 0, conversions: 0, count: 0 };
-  
-  for (const row of processed_data) {
-    let regex_match, fuzzy_match, cost, impressions, clicks, conversions;
-    
-    if (campaign_type === 'PMAX') {
-      regex_match = row[4];
-      fuzzy_match = row[5];
-      cost = row[7];
-      impressions = row[9];
-      clicks = row[10];
-      conversions = row[12];
-    } else {
-      regex_match = row[7];
-      fuzzy_match = row[8];
-      cost = row[10];
-      impressions = row[12];
-      clicks = row[13];
-      conversions = row[15];
-    }
-    
-    const is_branded = regex_match === 'likely branded' || fuzzy_match === 'likely branded' || fuzzy_match === 'possibly branded';
-    
-    if (is_branded) {
-      branded_stats.cost += cost;
-      branded_stats.impressions += impressions;
-      branded_stats.clicks += clicks;
-      branded_stats.conversions += conversions;
-      branded_stats.count += 1;
-    } else {
-      non_branded_stats.cost += cost;
-      non_branded_stats.impressions += impressions;
-      non_branded_stats.clicks += clicks;
-      non_branded_stats.conversions += conversions;
-      non_branded_stats.count += 1;
-    }
-  }
-  
-  const branded_cpc = branded_stats.clicks > 0 ? branded_stats.cost / branded_stats.clicks : 0;
-  const non_branded_cpc = non_branded_stats.clicks > 0 ? non_branded_stats.cost / non_branded_stats.clicks : 0;
-  
-  const summary_headers = ["Category", "Search Terms", "Cost", "Impressions", "Clicks", "CPC", "Conversions", "Similarity Score"];
-  sheet.getRange(12, 6, 1, summary_headers.length).setValues([summary_headers]);
-  
-  const branded_row = ["Branded Terms", branded_stats.count, branded_stats.cost, branded_stats.impressions, branded_stats.clicks, branded_cpc, branded_stats.conversions, "-"];
-  sheet.getRange(13, 6, 1, branded_row.length).setValues([branded_row]);
-  
-  const non_branded_row = ["Non-Branded Terms", non_branded_stats.count, non_branded_stats.cost, non_branded_stats.impressions, non_branded_stats.clicks, non_branded_cpc, non_branded_stats.conversions, "-"];
-  sheet.getRange(14, 6, 1, non_branded_row.length).setValues([non_branded_row]);
-  
-  const summary_range = sheet.getRange(12, 6, 3, summary_headers.length);
-  summary_range.setBorder(true, true, true, true, true, true);
-  
-  sheet.getRange(12, 6, 1, summary_headers.length).setFontWeight('bold').setBackground('#d9ead3');
-  sheet.getRange(13, 8, 2, 1).setNumberFormat('$#,##0.00');
-  sheet.getRange(13, 11, 2, 1).setNumberFormat('$#,##0.00');
-  sheet.getRange(13, 7, 2, 1).setNumberFormat('#,##0');
-  sheet.getRange(13, 9, 2, 1).setNumberFormat('#,##0');
-  sheet.getRange(13, 10, 2, 1).setNumberFormat('#,##0');
-  sheet.getRange(13, 12, 2, 1).setNumberFormat('0.00');
 }
 
 function add_report_header(sheet, days, account_info, campaign_name, campaign_id, campaign_type) {
@@ -373,28 +297,83 @@ function add_report_header(sheet, days, account_info, campaign_name, campaign_id
   sheet.getRange(9, 1).setFontSize(8).setFontStyle('italic');
 }
 
-function analyze_brand_matching(search_term) {
+function determine_siemens_branded(search_term, max_string_similarity, terms_detected) {
   if (!search_term || typeof search_term !== 'string') {
-    return { regex_match: '', fuzzy_match: '', similarity_score: 0 };
+    return 'unable to evaluate';
   }
   
   if (is_entirely_non_latin(search_term)) {
-    return { regex_match: '', fuzzy_match: 'not evaluated', similarity_score: 0 };
+    return 'unable to evaluate';
   }
   
-  const regex_result = check_regex_brand_match(search_term);
-  if (regex_result === 'likely branded') {
-    return { regex_match: regex_result, fuzzy_match: 'likely branded', similarity_score: 1.0 };
+  const has_detected_terms = terms_detected.length > 0;
+  const meets_fuzzy_threshold = max_string_similarity >= CONFIG.fuzzy_threshold;
+  
+  if (has_detected_terms || meets_fuzzy_threshold) {
+    return 'branded';
   }
   
-  const similarity_score = BRANDED_FUZZY_3(search_term, CONFIG.branded_terms);
-  const fuzzy_classification = classify_fuzzy_result(similarity_score);
+  return 'not branded';
+}
+
+function find_best_branded_match(search_term) {
+  if (!search_term || typeof search_term !== 'string') return '';
   
-  return {
-    regex_match: regex_result,
-    fuzzy_match: fuzzy_classification,
-    similarity_score: Math.round(similarity_score * 1000) / 1000
-  };
+  if (is_entirely_non_latin(search_term)) return '';
+  
+  const search_lower = search_term.toLowerCase();
+  let best_match = '';
+  let max_similarity = 0;
+  
+  for (const branded_term of CONFIG.branded_terms) {
+    const branded_lower = branded_term.toLowerCase();
+    
+    if (search_lower === branded_lower) {
+      return branded_term;
+    }
+    
+    const similarity = jaroWinklerSimilarity(search_lower, branded_lower);
+    if (similarity > max_similarity) {
+      max_similarity = similarity;
+      best_match = branded_term;
+    }
+  }
+  
+  return max_similarity >= CONFIG.similarity_min_threshold ? best_match : '';
+}
+
+function find_detected_branded_terms(search_term) {
+  if (!search_term || typeof search_term !== 'string') return '';
+  
+  if (is_entirely_non_latin(search_term)) return '';
+  
+  const detected_terms = [];
+  
+  for (const branded_term of CONFIG.branded_terms) {
+    if (is_branded_term_detected(search_term, branded_term)) {
+      detected_terms.push(branded_term);
+    }
+  }
+  
+  return detected_terms.length > 0 ? detected_terms.join(', ') : '';
+}
+
+function is_branded_term_detected(search_term, branded_term) {
+  const search_lower = search_term.toLowerCase();
+  const branded_lower = branded_term.toLowerCase();
+  
+  if (search_lower === branded_lower) return true;
+  
+  const branded_words = branded_lower.split(/\s+/);
+  
+  if (branded_words.length === 1) {
+    const word_boundary_pattern = new RegExp(`\\b${escape_regex(branded_lower)}\\b`);
+    return word_boundary_pattern.test(search_lower);
+  } else {
+    const branded_phrase = branded_words.join('\\s+');
+    const phrase_pattern = new RegExp(`\\b${branded_phrase}\\b`);
+    return phrase_pattern.test(search_lower);
+  }
 }
 
 function is_entirely_non_latin(search_term) {
@@ -402,30 +381,6 @@ function is_entirely_non_latin(search_term) {
   if (cleaned_term.length === 0) return false;
   const non_latin_regex = /^[\u0400-\u04FF\u0500-\u052F\u2DE0-\u2DFF\uA640-\uA69F\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\u0600-\u06FF]+$/;
   return non_latin_regex.test(cleaned_term);
-}
-
-function check_regex_brand_match(search_term) {
-  const search_lower = search_term.toLowerCase();
-  
-  for (const branded_term of CONFIG.branded_terms) {
-    const branded_lower = branded_term.toLowerCase();
-    
-    if (search_lower === branded_lower) return 'likely branded';
-    if (branded_lower.length > 3 && search_lower.includes(branded_lower)) return 'likely branded';
-    
-    if (branded_lower.length <= 3) {
-      const word_boundary_regex = new RegExp(`\\b${escape_regex(branded_lower)}\\b`, 'i');
-      if (word_boundary_regex.test(search_term)) return 'likely branded';
-    }
-  }
-  
-  return '';
-}
-
-function classify_fuzzy_result(similarity_score) {
-  if (similarity_score >= CONFIG.fuzzy_threshold) return 'possibly branded';
-  if (similarity_score >= CONFIG.similarity_min_threshold) return 'unlikely';
-  return '';
 }
 
 function escape_regex(string) {
@@ -447,13 +402,7 @@ function clear_sheet_content(sheet) {
 }
 
 function format_results_sheet(sheet, column_count, header_row, campaign_type) {
-  let column_widths;
-  
-  if (campaign_type === 'PMAX') {
-    column_widths = { 1: 110, 2: 210, 3: 260, 4: 130, 5: 110, 6: 160, 7: 110, 8: 90, 9: 130, 10: 90, 11: 70, 12: 80, 13: 90, 14: 150, 15: 150 };
-  } else {
-    column_widths = { 1: 110, 2: 210, 3: 260, 4: 130, 5: 150, 6: 150, 7: 200, 8: 110, 9: 160, 10: 110, 11: 90, 12: 130, 13: 90, 14: 70, 15: 80, 16: 90, 17: 150, 18: 150 };
-  }
+  const column_widths = { 1: 110, 2: 210, 3: 260, 4: 140, 5: 145, 6: 160, 7: 130, 8: 90, 9: 130, 10: 90, 11: 70, 12: 80, 13: 90, 14: 150, 15: 150 };
   
   for (let col = 1; col <= column_count; col++) {
     if (column_widths[col]) {
@@ -468,23 +417,36 @@ function format_results_sheet(sheet, column_count, header_row, campaign_type) {
     const last_row = sheet.getLastRow();
     const data_rows = last_row - header_row;
     
-    if (campaign_type === 'PMAX') {
-      sheet.getRange(header_row + 1, 8, data_rows, 1).setNumberFormat('$#,##0.00');
-      sheet.getRange(header_row + 1, 9, data_rows, 1).setNumberFormat('0.00%');
-      sheet.getRange(header_row + 1, 12, data_rows, 1).setNumberFormat('$#,##0.00');
-      sheet.getRange(header_row + 1, 7, data_rows, 1).setNumberFormat('0.000');
-      sheet.getRange(header_row + 1, 10, data_rows, 1).setNumberFormat('#,##0');
-      sheet.getRange(header_row + 1, 11, data_rows, 1).setNumberFormat('#,##0');
-      sheet.getRange(header_row + 1, 13, data_rows, 1).setNumberFormat('0.00');
-    } else {
-      sheet.getRange(header_row + 1, 11, data_rows, 1).setNumberFormat('$#,##0.00');
-      sheet.getRange(header_row + 1, 12, data_rows, 1).setNumberFormat('0.00%');
-      sheet.getRange(header_row + 1, 15, data_rows, 1).setNumberFormat('$#,##0.00');
-      sheet.getRange(header_row + 1, 10, data_rows, 1).setNumberFormat('0.000');
-      sheet.getRange(header_row + 1, 13, data_rows, 1).setNumberFormat('#,##0');
-      sheet.getRange(header_row + 1, 14, data_rows, 1).setNumberFormat('#,##0');
-      sheet.getRange(header_row + 1, 16, data_rows, 1).setNumberFormat('0.00');
+    sheet.getRange(header_row + 1, 5, data_rows, 1).setNumberFormat('0.000');
+    sheet.getRange(header_row + 1, 8, data_rows, 1).setNumberFormat('$#,##0.00');
+    sheet.getRange(header_row + 1, 9, data_rows, 1).setNumberFormat('0.00%');
+    sheet.getRange(header_row + 1, 10, data_rows, 1).setNumberFormat('#,##0');
+    sheet.getRange(header_row + 1, 11, data_rows, 1).setNumberFormat('#,##0');
+    sheet.getRange(header_row + 1, 12, data_rows, 1).setNumberFormat('$#,##0.00');
+    sheet.getRange(header_row + 1, 13, data_rows, 1).setNumberFormat('0.00');
+  }
+}
+
+function add_to_exclusion_list(account_name, branded_terms) {
+  try {
+    const exclusion_list_name = `${account_name} - branded exclusions`;
+    let keywords_added = 0;
+    
+    const campaigns_iterator = AdsApp.campaigns().get();
+    
+    while (campaigns_iterator.hasNext()) {
+      const campaign = campaigns_iterator.next();
+      
+      for (const term of branded_terms) {
+        const exact_match_keyword = `[${term}]`;
+        campaign.createNegativeKeyword(exact_match_keyword);
+        keywords_added++;
+      }
     }
+    
+    Logger.log(`Added ${keywords_added} negative keywords to campaigns for exclusion list: ${exclusion_list_name}`);
+  } catch (error) {
+    Logger.log(`Error adding to exclusion list: ${error.message}`);
   }
 }
 
